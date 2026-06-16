@@ -1,0 +1,50 @@
+---
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: dashboards
+  namespace: openshift-cluster-observability-operator
+spec:
+  type: Dashboards
+---
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: distributed-tracing
+  namespace: openshift-cluster-observability-operator
+spec:
+  type: DistributedTracing
+---
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: logging
+  namespace: openshift-cluster-observability-operator
+spec:
+  logging:
+    logsLimit: 100
+    lokiStack:
+      name: logging-loki
+      namespace: openshift-logging
+    schema: otel
+    timeout: 30s
+  type: Logging
+---
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: monitoring
+  namespace: openshift-cluster-observability-operator
+spec:
+  monitoring:
+    clusterHealthAnalyzer:
+      enabled: true
+  type: Monitoring
+---
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: troubleshooting-panel
+  namespace: openshift-cluster-observability-operator
+spec:
+  type: TroubleshootingPanel

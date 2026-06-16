@@ -1,0 +1,31 @@
+kind: Secret
+apiVersion: v1
+metadata:
+  name: credentials
+  namespace: openshift-lightspeed
+data:
+  apitoken: "${LLM_API_TOKEN}"
+---
+apiVersion: ols.openshift.io/v1alpha1
+kind: OLSConfig
+metadata:
+  name: cluster
+spec:
+  featureGates:
+  - MCPServer
+  llm:
+    providers:
+    - name: incidents-analysis-provider
+      type: openai
+      credentialsSecretRef:
+        name: credentials
+      url: "${LLM_URL}"
+      models:
+      - name: "${LLM_MODEL}"
+  mcpServers:
+  - name: cluster-health
+    url: 'http://cluster-health-mcp-server.openshift-cluster-observability-operator.svc:8085/mcp'
+  ols:
+    defaultModel: "${LLM_MODEL}"
+    defaultProvider: incidents-analysis-provider
+    logLevel: INFO

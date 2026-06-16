@@ -1,0 +1,20 @@
+kind: LokiStack
+apiVersion: loki.grafana.com/v1
+metadata:
+  name: logging-loki
+  namespace: openshift-logging
+spec:
+  size: 1x.demo
+  storage:
+    schemas:
+      - effectiveDate: "2024-10-01"
+        version: v13
+    secret:
+      type: s3
+      name: observability-demo-loki-secret
+    tls:
+      caName: "openshift-service-ca.crt"
+      caKey: "service-ca.crt"
+  storageClassName: ocs-external-storagecluster-ceph-rbd
+  tenants:
+    mode: openshift-logging
