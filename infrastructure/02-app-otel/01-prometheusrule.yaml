@@ -1,0 +1,22 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: myreadings-alerts
+  namespace: myreadings-dev
+  labels:
+    app.kubernetes.io/part-of: myreadings
+spec:
+  groups:
+    - name: myreadings.latency
+      rules:
+        - alert: SearchLatencyHigh
+          expr: >
+            histogram_quantile(0.95,
+              sum(rate(http_server_requests_seconds_bucket{job="myreadings-app", uri="/api/v1/books/search"}[5m])) by (le)
+            ) > 0.5
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Search endpoint P95 latency is above 500ms"
+            description: "P95 latency for /api/v1/books/search is {{ $value | humanizeDuration }}."

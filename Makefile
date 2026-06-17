@@ -62,7 +62,7 @@ deploy-platform: check-tools ## 2. Deploy UWM, Loki, Tempo, UI Plugins, MCP, and
 	@echo "   [3/6] Linking Storage to Platform..."
 	@./$(SCRIPTS_DIR)/setup-storage.sh
 	
-	@echo "   [4/6] Deploying Loki, Tempo and Netobserv Stacks..."
+	@echo "   [4/6] Deploying Loki, Tempo Stacks..."
 	@$(OC) apply -f $(PLATFORM_DIR)/02-logging-stack.yaml
 	@$(OC) apply -f $(PLATFORM_DIR)/03-tracing-stack.yaml
 	
@@ -91,8 +91,24 @@ deploy-platform: check-tools ## 2. Deploy UWM, Loki, Tempo, UI Plugins, MCP, and
 
 	@echo "✅ Platform Stack Deployed."
 
+deploy-app: check-tools ## 3. Deploy MyReadings App via ArgoCD + OTel Collector
+	@echo "🚀 [Layer 2] Starting App Deployment..."
+	@echo "   [1/4] Bootstrapping ArgoCD + Pipelines..."
+	@./$(SCRIPTS_DIR)/setup-app.sh $(GITHUB_TOKEN)
+	@echo "   [2/4] Creating OTel RBAC (ServiceAccount, ClusterRoles)..."
+	@$(OC) apply -f infrastructure/02-app-otel/00-rbac.yaml
+	@echo "   [3/4] Deploying OTel Collector..."
+	@$(OC) apply -f infrastructure/02-app-otel/00-otel-collector.yaml
+	@if [ -n "$(WEBHOOK_SECRET)" ]; then \
+		echo "   [4/4] Configuring ArgoCD GitHub webhook..."; \
+		$(OC) patch secret argocd-secret -n openshift-gitops --type merge \
+			-p '{"stringData":{"webhook.github.secret":"$(WEBHOOK_SECRET)"}}'; \
+	else \
+		echo "   [4/4] Skipping ArgoCD webhook (WEBHOOK_SECRET not set)"; \
+	fi
+	@echo "✅ App + OTel Stack Deployed."
 
-deploy-all: deploy-operators deploy-platform ## 🌟 Install EVERYTHING from scratch
+deploy-all: deploy-operators deploy-platform deploy-app ## 🌟 Install EVERYTHING from scratch
 	@echo ""
 	@echo "🎉 Full Stack Installation Complete!"
 	@echo "   - Metrics: User Workload Monitoring (Thanos)"

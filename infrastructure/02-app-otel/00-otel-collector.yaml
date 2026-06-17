@@ -1,0 +1,98 @@
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: myreadings
+  namespace: myreadings-dev
+  labels:
+    app: myreadings-collector
+spec:
+  mode: deployment
+  serviceAccount: myreadings-otel-collector
+  observability:
+    metrics:
+      enableMetrics: true
+  config:
+    extensions:
+      bearertokenauth:
+        filename: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 50
+        spike_limit_percentage: 10
+      batch:
+        send_batch_size: 128
+        timeout: 2s
+      k8sattributes:
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.namespace.name
+            - k8s.deployment.name
+        pod_association:
+          - sources: [{from: connection}]
+      filter/drop_noise:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["http.target"] == "/q/metrics"'
+            - 'attributes["http.target"] == "/q/health/ready"'
+            - 'attributes["http.target"] == "/q/health/live"'
+            - 'attributes["http.target"] == "/healthz"'
+        metrics:
+          datapoint:
+            - 'attributes["http.route"] == "/q/metrics"'
+
+    exporters:
+      otlp/tempo:
+        endpoint: https://tempo-platform-gateway.openshift-tracing.svc:8090
+        tls:
+          insecure: false
+          insecure_skip_verify: true
+        auth:
+          authenticator: bearertokenauth
+        headers:
+          X-Scope-OrgID: "platform"
+
+      otlphttp/loki:
+        endpoint: https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application/otlp
+        tls:
+          insecure: false
+          insecure_skip_verify: true
+        auth:
+          authenticator: bearertokenauth
+        headers:
+          X-Scope-OrgID: "application"
+
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        resource_to_telemetry_conversion:
+          enabled: true
+
+      debug:
+        verbosity: basic
+
+    service:
+      extensions: [bearertokenauth]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, filter/drop_noise, batch]
+          exporters: [otlp/tempo]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [otlphttp/loki]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, filter/drop_noise, batch]
+          exporters: [prometheus]
