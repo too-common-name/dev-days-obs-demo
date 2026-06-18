@@ -39,6 +39,8 @@ spec:
   monitoring:
     clusterHealthAnalyzer:
       enabled: true
+    perses:
+      enabled: true
   type: Monitoring
 ---
 apiVersion: observability.openshift.io/v1alpha1

@@ -13,6 +13,8 @@ PLATFORM_DIR  := infrastructure/01-platform
 SCRIPTS_DIR   := scripts
 TEMPLATE_DIR  := templates
 GENERATED_DIR := _generated
+INCIDENT_MCP_BASE_URL  := https://raw.githubusercontent.com/openshift/cluster-health-analyzer/refs/heads/main/manifests/mcp
+
 
 # --- Settings ---
 _ := $(shell chmod +x $(SCRIPTS_DIR)/*.sh)
@@ -53,6 +55,12 @@ delete-operators: check-tools ## ⚠️  Uninstall Operators (Subscriptions & Op
 deploy-platform: check-tools ## 2. Deploy UWM, Loki, Tempo, UI Plugins, MCP, and OLS Config
 	@echo "🚀 [Layer 1] Starting Platform Deployment..."
 
+	@echo "   [Pre-Flight] Installing Incident Detection MCP Server..."
+	@$(OC) apply -f $(MCP_BASE_URL)/01_service_account.yaml
+	@$(OC) apply -f $(MCP_BASE_URL)/02_deployment.yaml
+	@$(OC) apply -f $(MCP_BASE_URL)/03_mcp_service.yaml
+	@echo "   ✅ MCP Server Deployed."
+
 	@echo "   [1/6] Configuring User Workload Monitoring..."
 	@$(OC) apply -f $(PLATFORM_DIR)/00-monitoring-config.yaml
 
@@ -66,10 +74,30 @@ deploy-platform: check-tools ## 2. Deploy UWM, Loki, Tempo, UI Plugins, MCP, and
 	@$(OC) apply -f $(PLATFORM_DIR)/02-logging-stack.yaml
 	@$(OC) apply -f $(PLATFORM_DIR)/03-tracing-stack.yaml
 	
-	@echo "   [5/6] Enabling Console Plugins (Troubleshooting/Incidents)..."
+	@echo "   [5/8] Enabling Console Plugins (Troubleshooting/Incidents)..."
 	@$(OC) apply -f $(PLATFORM_DIR)/04-ui-plugins.yaml
-		
-	@echo "   [6/6] Checking OLS Configuration..."
+
+	@echo "   [6/8] Creating Korrel8r OTLP rules ConfigMap..."
+	@$(OC) apply -f $(PLATFORM_DIR)/05-korrel8r-otel-rules.yaml
+
+	@echo "   [7/10] Patching Korrel8r Deployment (SSA)..."
+	@$(OC) apply --server-side --field-manager=korrel8r-otel-customization --force-conflicts \
+		-f $(PLATFORM_DIR)/06-korrel8r-deployment-patch.yaml
+
+	@echo "   [8/10] Creating Perses Global Datasource..."
+	@$(OC) apply -f $(PLATFORM_DIR)/07-perses-datasource.yaml
+
+	@echo "   [9/10] Patching OLS CSV for Perses MCP image..."
+	@CSV=$$($(OC) get csv -n openshift-lightspeed -o jsonpath='{.items[?(@.spec.displayName=="OpenShift Lightspeed Operator")].metadata.name}'); \
+	if [ -n "$$CSV" ]; then \
+		$(OC) get csv $$CSV -n openshift-lightspeed -o yaml | \
+			$(YQ) '(.spec.install.spec.deployments[].spec.template.spec.containers[].args[] | select(. == "--openshift-mcp-server-image=*")) = "--openshift-mcp-server-image=quay.io/tremes/ocp-mcp"' | \
+			$(OC) replace -f -; \
+	else \
+		echo "     ⚠️  OLS CSV not found. Skipping MCP image patch."; \
+	fi
+
+	@echo "   [10/10] Checking OLS Configuration..."
 	@if [ -z "$(LLM_URL)" ] || [ -z "$(LLM_API_TOKEN)" ]; then \
 		echo "     ⚠️  LLM_URL or LLM_API_TOKEN missing. Skipping OLS enablement."; \
 	else \
