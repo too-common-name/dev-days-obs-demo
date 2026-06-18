@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: myreadings-otel-collector-monitor
+  namespace: myreadings-dev
+  labels:
+    app.kubernetes.io/part-of: myreadings
+spec:
+  selector:
+    matchLabels:
+      app: myreadings-collector
+  endpoints:
+    - port: prometheus
+      interval: 15s
+      path: /metrics
+      scheme: http

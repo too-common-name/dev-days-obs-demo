@@ -1,0 +1,34 @@
+# Server Side Apply patch for the Korrel8r Deployment.
+#
+# Adds custom OTLP rules volume/mounts without conflicting with the
+# observability-operator's managed fields.
+#
+# Apply with:
+#   oc apply --server-side \
+#            --field-manager=korrel8r-otel-customization \
+#            --force-conflicts \
+#            -f 06-korrel8r-deployment-patch.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: korrel8r
+  namespace: openshift-cluster-observability-operator
+spec:
+  template:
+    spec:
+      volumes:
+        - name: otel-rules
+          configMap:
+            name: korrel8r-otel-rules
+      containers:
+        - name: korrel8r
+          volumeMounts:
+            - name: otel-rules
+              mountPath: /etc/korrel8r/rules/all.yaml
+              subPath: all.yaml
+              readOnly: true
+            - name: otel-rules
+              mountPath: /etc/korrel8r/rules/otel-log.yaml
+              subPath: otel-log.yaml
+              readOnly: true

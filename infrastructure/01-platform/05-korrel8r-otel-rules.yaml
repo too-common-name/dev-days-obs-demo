@@ -1,0 +1,53 @@
+# Custom Korrel8r rules for OTLP log correlation.
+#
+# The COO-managed Korrel8r uses default rules that expect CLF-style log labels
+# (kubernetes_namespace_name, kubernetes_pod_name). OTLP logs use k8s_* labels.
+#
+# Strategy: mount custom rules into /etc/korrel8r/rules/ via subPath, overriding
+# the built-in all.yaml to include our otel-log.yaml. Applied via Server Side
+# Apply with a distinct field-manager so the operator doesn't overwrite it.
+#
+# Apply with:
+#   oc apply -f 05a-korrel8r-otel-rules-cm.yaml
+#   oc apply --server-side --field-manager=korrel8r-otel-customization \
+#            --force-conflicts -f 05b-korrel8r-deployment-patch.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: korrel8r-otel-rules
+  namespace: openshift-cluster-observability-operator
+  labels:
+    app.kubernetes.io/part-of: korrel8r
+data:
+  all.yaml: |
+    include:
+      - k8s.yaml
+      - alert.yaml
+      - log.yaml
+      - netflow.yaml
+      - trace.yaml
+      - incident.yaml
+      - otel-log.yaml
+
+  otel-log.yaml: |
+    rules:
+      - name: PodToLogOtel
+        start:
+          domain: k8s
+          classes: [Pod]
+        goal:
+          domain: log
+          classes: [application]
+        result:
+          query: 'log:application:{k8s_namespace_name="{{.metadata.namespace}}",k8s_pod_name="{{.metadata.name}}"}'
+
+      - name: LogOtelToPod
+        start:
+          domain: log
+        goal:
+          domain: k8s
+          classes: [Pod]
+        result:
+          query: |-
+            k8s:Pod:{namespace: "{{.k8s_namespace_name}}", name: "{{.k8s_pod_name}}"}
