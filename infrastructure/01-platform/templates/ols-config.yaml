@@ -13,6 +13,11 @@ metadata:
 spec:
   featureGates:
   - MCPServer
+  querySystemPrompt: |
+    When the user asks to visualize metrics, plot data, or create charts,
+    always use the show_timeseries tool instead of execute_range_query.
+    When investigating incidents, use the get_incidents tool from the
+    cluster-health MCP server.
   llm:
     providers:
     - name: incidents-analysis-provider
@@ -25,7 +30,12 @@ spec:
   mcpServers:
   - name: cluster-health
     url: 'http://cluster-health-mcp-server.openshift-cluster-observability-operator.svc:8085/mcp'
+    headers:
+    - name: kubernetes-authorization
+      valueFrom:
+        type: client
   ols:
+    introspectionEnabled: true
     defaultModel: "${LLM_MODEL}"
     defaultProvider: incidents-analysis-provider
     logLevel: INFO

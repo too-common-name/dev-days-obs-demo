@@ -25,5 +25,16 @@ spec:
   template:
     gateway:
       enabled: true
-      rbac:
-        enabled: true 
+    querier:
+      replicas: 1
+      resources:
+        limits:
+          memory: 1Gi
+          cpu: "1"
+    queryFrontend:
+      component:
+        replicas: 1
+        resources:
+          limits:
+            memory: 1Gi
+            cpu: "1"

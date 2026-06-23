@@ -9,14 +9,78 @@ spec:
   groups:
     - name: myreadings.latency
       rules:
-        - alert: SearchLatencyHigh
+        - alert: AppLatencyWarning
           expr: >
             histogram_quantile(0.95,
-              sum(rate(http_server_request_duration_seconds_bucket{exported_job="myreadings-app", http_route="/api/v1/books/search"}[5m])) by (le)
+              sum(rate(http_server_request_duration_seconds_bucket{exported_job="myreadings-app"}[2m])) by (le)
             ) > 0.5
-          for: 1m
+          for: 15s
           labels:
             severity: warning
           annotations:
+            summary: "Application P95 latency is above 500ms"
+            description: "The 95th percentile response time across all endpoints has exceeded 500ms, indicating degraded performance."
+
+        - alert: AppLatencyCritical
+          expr: >
+            histogram_quantile(0.95,
+              sum(rate(http_server_request_duration_seconds_bucket{exported_job="myreadings-app"}[2m])) by (le)
+            ) > 1
+          for: 15s
+          labels:
+            severity: critical
+          annotations:
+            summary: "Application P95 latency is above 1s"
+            description: "The 95th percentile response time across all endpoints has exceeded 1 second. Immediate investigation required."
+
+        - alert: SearchLatencyCritical
+          expr: >
+            histogram_quantile(0.95,
+              sum(rate(http_server_request_duration_seconds_bucket{exported_job="myreadings-app", http_route="/api/v1/books/search"}[2m])) by (le)
+            ) > 0.5
+          for: 15s
+          labels:
+            severity: critical
+          annotations:
             summary: "Search endpoint P95 latency is above 500ms"
-            description: "P95 latency for /api/v1/books/search is {{ $value | humanizeDuration }}."
+            description: "The /api/v1/books/search endpoint 95th percentile latency has exceeded 500ms."
+
+    - name: myreadings.errors
+      rules:
+        - alert: AppErrorRateHigh
+          expr: >
+            sum(rate(http_server_request_duration_seconds_count{exported_job="myreadings-app", http_response_status_code=~"5.."}[2m]))
+            /
+            sum(rate(http_server_request_duration_seconds_count{exported_job="myreadings-app"}[2m]))
+            > 0.01
+          for: 15s
+          labels:
+            severity: warning
+          annotations:
+            summary: "Application HTTP 5xx error rate is above 1%"
+            description: "More than 1% of requests are returning server errors (5xx). Check application logs for details."
+
+    - name: myreadings.saturation
+      rules:
+        - alert: AppRequestSaturation
+          expr: >
+            sum(rate(http_server_request_duration_seconds_count{exported_job="myreadings-app"}[2m])) > 200
+          for: 15s
+          labels:
+            severity: warning
+          annotations:
+            summary: "Application request rate is above 200 req/s"
+            description: "The application is receiving sustained high traffic (>200 req/s), which may lead to resource exhaustion."
+
+        - alert: AppCPUThrottling
+          expr: >
+            max(rate(container_cpu_usage_seconds_total{namespace="myreadings-dev", container="myreadings-app"}[2m]))
+            /
+            max(kube_pod_container_resource_limits{namespace="myreadings-dev", container="myreadings-app", resource="cpu"})
+            > 0.8
+          for: 15s
+          labels:
+            severity: warning
+          annotations:
+            summary: "Application CPU usage is above 80% of its limit"
+            description: "The application container is consuming more than 80% of its CPU limit and may be throttled."
