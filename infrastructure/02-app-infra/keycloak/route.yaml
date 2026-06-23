@@ -1,0 +1,16 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: myreadings-keycloak
+  annotations:
+  labels:
+    app.kubernetes.io/part-of: myreadings
+spec:
+  to:
+    kind: Service
+    name: myreadings-keycloak-service
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,45 @@
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: myreadings-rabbitmq
+  annotations:
+  labels:
+    app.kubernetes.io/part-of: myreadings
+spec:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    storage: 5Gi
+  override:
+    statefulSet:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: rabbitmq
+                startupProbe:
+                  exec:
+                    command:
+                      - rabbitmq-diagnostics
+                      - check_running
+                  initialDelaySeconds: 30
+                  timeoutSeconds: 30
+                  periodSeconds: 15
+                  failureThreshold: 30
+                readinessProbe:
+                  exec:
+                    command:
+                      - rabbitmq-diagnostics
+                      - check_running
+                  timeoutSeconds: 15
+  rabbitmq:
+    additionalPlugins:
+      - rabbitmq_management
+    additionalConfig: |
+      default_vhost = my-readings

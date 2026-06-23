@@ -1,0 +1,65 @@
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: myreadings-keycloak
+  annotations:
+  labels:
+    app.kubernetes.io/part-of: myreadings
+spec:
+  image: quay.io/rh-ee-drossi/myreadings-keycloak:latest
+  instances: 1
+  hostname:
+    strict: false
+  ingress:
+    enabled: false
+  http:
+    httpEnabled: true
+  db:
+    vendor: postgres
+    host: myreadings-db-primary
+    port: 5432
+    database: keycloak_db
+    usernameSecret:
+      name: myreadings-db-pguser-keycloak-user
+      key: user
+    passwordSecret:
+      name: myreadings-db-pguser-keycloak-user
+      key: password
+  proxy:
+    headers: xforwarded
+  unsupported:
+    podTemplate:
+      spec:
+        containers:
+          - env:
+              - name: KK_TO_RMQ_URL
+                valueFrom:
+                  secretKeyRef:
+                    name: myreadings-rabbitmq-default-user
+                    key: host
+              - name: KK_TO_RMQ_PORT
+                valueFrom:
+                  secretKeyRef:
+                    name: myreadings-rabbitmq-default-user
+                    key: port
+              - name: KK_TO_RMQ_VHOST
+                value: my-readings
+              - name: KK_TO_RMQ_EXCHANGE
+                value: amq.topic
+              - name: KK_TO_RMQ_USERNAME
+                valueFrom:
+                  secretKeyRef:
+                    name: myreadings-rabbitmq-default-user
+                    key: username
+              - name: KK_TO_RMQ_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: myreadings-rabbitmq-default-user
+                    key: password
+            resources:
+              requests:
+                cpu: 100m
+                memory: 512Mi
+              limits:
+                cpu: 500m
+                memory: 1Gi
