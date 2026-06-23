@@ -1,3 +1,5 @@
 .cursor/rules/
+.cache/
+infrastructure/01-platform/_generated/
 test.yaml
 scenarios.txt
