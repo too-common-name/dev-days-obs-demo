@@ -13,6 +13,11 @@ PLATFORM_DIR  := infrastructure/01-platform
 APP_INFRA_DIR := infrastructure/02-app-infra
 SCRIPTS_DIR   := scripts
 
+# --- OLS ---
+OLS_NS              := openshift-lightspeed
+OLS_OPERATOR_DEPLOY := lightspeed-operator-controller-manager
+OLS_APP_LABEL       := app.kubernetes.io/component=application-server
+
 INCIDENT_MCP_BASE_URL := https://raw.githubusercontent.com/openshift/cluster-health-analyzer/refs/heads/main/manifests/mcp
 
 # --- Helm Chart (cloned from GitHub into .cache/) ---
@@ -30,12 +35,20 @@ KC_CLIENT := myreadings-client
 KC_HOST  = $(shell $(OC) get route myreadings-keycloak -n $(APP_NS) -o jsonpath='https://{.spec.host}' 2>/dev/null)
 APP_HOST = $(shell $(OC) get route myreadings-ui -n $(APP_NS) -o jsonpath='https://{.spec.host}' 2>/dev/null)
 
+# --- Stress test (override via env or CLI) ---
+KC_USERNAME    ?= drossi
+KC_PASSWORD    ?= drossi
+LOCUST_USERS   ?= 30
+LOCUST_RATE    ?= 5
+LOCUST_TIME    ?= 8m
+
 _ := $(shell chmod +x $(SCRIPTS_DIR)/*.sh 2>/dev/null)
 
 .PHONY: help check-tools \
 	deploy-operators delete-operators \
 	deploy-platform deploy-infra deploy-app deploy-all \
-	stress break-app fix-app \
+	stress break fix fix-all prep-demo \
+	fix-postgres \
 	destroy-app destroy-infra destroy-all
 
 help: ## Show this help message
@@ -106,6 +119,7 @@ deploy-platform: check-tools ## Deploy UWM, Loki, Tempo, Korrel8r, Perses, MCP, 
 deploy-infra: check-tools ## Deploy backing services, wait, configure, enable grants
 	@echo "[Layer 2a] Deploying infrastructure..."
 	@$(OC) apply -f $(APP_INFRA_DIR)/namespace.yaml
+	@$(OC) apply -f $(APP_INFRA_DIR)/perses-dashboards.yaml
 	@$(OC) apply -f $(APP_INFRA_DIR)/postgres/scc-anyuid.yaml
 	@$(OC) apply -f $(APP_INFRA_DIR)/rabbitmq/scc-anyuid.yaml
 	@$(OC) apply -f $(APP_INFRA_DIR)/postgres/init-sql.yaml          -n $(APP_NS)
@@ -152,7 +166,9 @@ $(HELM_CHART_DIR):
 
 deploy-app: check-tools $(HELM_CHART_DIR) ## Deploy microservices via Helm (chart from GitHub)
 	@$(OC) scale deployment myreadings-app -n $(APP_NS) --replicas=0 2>/dev/null || true
-	@$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --wait --timeout 5m
+	@KC_ISSUER="$$($(OC) get route myreadings-keycloak -n $(APP_NS) -o jsonpath='https://{.spec.host}/realms/$(KC_REALM)')"; \
+	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --wait --timeout 5m \
+		--set keycloak.tokenIssuer="$$KC_ISSUER"
 	@echo "App deployed: $(APP_HOST)"
 
 deploy-all: deploy-operators deploy-platform deploy-infra deploy-app ## Full install from scratch
@@ -161,19 +177,78 @@ deploy-all: deploy-operators deploy-platform deploy-infra deploy-app ## Full ins
 #  DEMO SCENARIOS
 # ====================================================================================
 
-break-app: check-tools $(HELM_CHART_DIR) ## Inject N+1 query regression on catalog search
-	@$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --reuse-values --set catalog.searchStrategy=n-plus-one
-	@echo "Regression injected."
+break: check-tools $(HELM_CHART_DIR) ## Inject N+1 + constrain resources
+	@$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --reuse-values \
+		--set catalog.searchStrategy=broken \
+		--set catalog.resources.requests.cpu=100m \
+		--set catalog.resources.limits.cpu=200m \
+		--set catalog.resources.requests.memory=96Mi \
+		--set catalog.resources.limits.memory=192Mi \
+		--set readinglist.resources.requests.cpu=30m \
+		--set readinglist.resources.limits.cpu=80m \
+		--set readinglist.resources.requests.memory=48Mi \
+		--set readinglist.resources.limits.memory=96Mi
+	@$(OC) rollout status deployment/catalog-service -n $(APP_NS) --timeout=120s
+	@$(OC) rollout status deployment/readinglist-service -n $(APP_NS) --timeout=120s
 
-fix-app: check-tools $(HELM_CHART_DIR) ## Restore normal search strategy
-	@$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --reuse-values --set catalog.searchStrategy=normal
-	@echo "Search strategy restored."
+fix: check-tools $(HELM_CHART_DIR) ## Restore everything (single helm upgrade)
+	@$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --reuse-values \
+		--set catalog.searchStrategy=normal \
+		--set catalog.resources.requests.cpu=300m \
+		--set catalog.resources.limits.cpu=1 \
+		--set catalog.resources.requests.memory=128Mi \
+		--set catalog.resources.limits.memory=256Mi \
+		--set readinglist.resources.requests.cpu=150m \
+		--set readinglist.resources.limits.cpu=500m \
+		--set readinglist.resources.requests.memory=128Mi \
+		--set readinglist.resources.limits.memory=256Mi
+	@$(OC) rollout status deployment/catalog-service -n $(APP_NS) --timeout=120s
+	@$(OC) rollout status deployment/readinglist-service -n $(APP_NS) --timeout=120s
+	@echo "All restored."
 
-stress: check-tools ## Run Locust stress test (http://localhost:8089)
-	$(PODMAN) run --rm --network host -v ./stress:/stress:Z \
+prep-demo: check-tools ## Pause OLS operator and enable traces toolset
+	@echo "Pausing OLS operator..."
+	@$(OC) scale deployment $(OLS_OPERATOR_DEPLOY) -n $(OLS_NS) --replicas=0
+	@echo "Enabling traces toolset in MCP server..."
+	@$(OC) get configmap openshift-mcp-server-config -n $(OLS_NS) -o json | \
+		python3 -c "import sys,json; cm=json.load(sys.stdin); \
+			toml=cm['data']['config.toml']; \
+			toml=toml.replace('toolsets = [\"core\", \"config\", \"helm\", \"metrics\"]', \
+				'toolsets = [\"core\", \"config\", \"helm\", \"metrics\", \"traces\"]') \
+				if '\"traces\"' not in toml else toml; \
+			cm['data']['config.toml']=toml; json.dump(cm,sys.stdout)" | \
+		$(OC) replace -f -
+	@$(OC) delete pod -n $(OLS_NS) -l $(OLS_APP_LABEL) --wait=false
+	@echo "OLS restarting with traces enabled (~60s)."
+
+fix-all: fix ## Full reset: fix app + unpause OLS operator (reconciles prompt + toolsets)
+	@echo "Unpausing OLS operator (will reconcile config)..."
+	@$(OC) scale deployment $(OLS_OPERATOR_DEPLOY) -n $(OLS_NS) --replicas=1
+	@echo "All restored. Operator will reconcile OLS config automatically."
+
+stress: check-tools 
+	@test -n "$(KC_USERNAME)" || (echo "Error: set KC_USERNAME and KC_PASSWORD" && exit 1)
+	@$(PODMAN) rm -f myreadings-locust 2>/dev/null || true
+	$(PODMAN) run -d --name myreadings-locust --network host -v ./stress:/stress:Z \
 		-e KC_TOKEN_URL="$(KC_HOST)/realms/$(KC_REALM)/protocol/openid-connect/token" \
 		-e KC_CLIENT_ID="$(KC_CLIENT)" \
+		-e KC_USERNAME="$(KC_USERNAME)" \
+		-e KC_PASSWORD="$(KC_PASSWORD)" \
 		docker.io/locustio/locust -f /stress/locustfile.py --host $(APP_HOST)
+	@echo "Locust running → http://localhost:8089"
+	@echo "Stop: podman stop myreadings-locust"
+
+# ====================================================================================
+#  MAINTENANCE
+# ====================================================================================
+
+fix-postgres: check-tools ## Fix Postgres after cluster reboot (Patroni standby.signal issue)
+	@PG_POD=$$($(OC) get pod -n $(APP_NS) -l postgres-operator.crunchydata.com/instance-set=instance1 -o name); \
+	$(OC) debug $$PG_POD -c database -n $(APP_NS) -- rm -f /pgdata/pg16/standby.signal; \
+	$(OC) delete $$PG_POD -n $(APP_NS); \
+	echo "Waiting for Postgres to recover..."; \
+	$(OC) wait --for=condition=Ready pod -l postgres-operator.crunchydata.com/instance-set=instance1 -n $(APP_NS) --timeout=120s
+	@echo "Postgres recovered."
 
 # ====================================================================================
 #  TEARDOWN

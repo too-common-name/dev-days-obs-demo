@@ -3,3 +3,4 @@
 infrastructure/01-platform/_generated/
 test.yaml
 scenarios.txt
+doc/demo-script.md

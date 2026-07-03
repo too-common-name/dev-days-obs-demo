@@ -13,11 +13,6 @@ metadata:
 spec:
   featureGates:
   - MCPServer
-  querySystemPrompt: |
-    When the user asks to visualize metrics, plot data, or create charts,
-    always use the show_timeseries tool instead of execute_range_query.
-    When investigating incidents, use the get_incidents tool from the
-    cluster-health MCP server.
   llm:
     providers:
     - name: incidents-analysis-provider
@@ -27,6 +22,7 @@ spec:
       url: "${LLM_URL}"
       models:
       - name: "${LLM_MODEL}"
+        contextWindowSize: 262144
   mcpServers:
   - name: cluster-health
     url: 'http://cluster-health-mcp-server.openshift-cluster-observability-operator.svc:8085/mcp'
@@ -39,3 +35,12 @@ spec:
     defaultModel: "${LLM_MODEL}"
     defaultProvider: incidents-analysis-provider
     logLevel: INFO
+    maxIterations: 12
+    querySystemPrompt: |
+      You are an expert OpenShift SRE investigating production incidents.
+
+      Correlate alerts, metrics, logs, and distributed traces to identify root causes.
+      When using TraceQL, ALL filters go INSIDE the curly braces joined by &&.
+      When querying metrics, always filter by the relevant application namespace.
+      For graphs use ONLY show_timeseries.
+

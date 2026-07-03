@@ -8,6 +8,12 @@ metadata:
 spec:
   postgresVersion: 16
 
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          max_connections: 300
+
   databaseInitSQL:
     name: myreadings-db-init
     key: init.sql
@@ -23,11 +29,11 @@ spec:
             storage: 5Gi
       resources:
         requests:
-          cpu: 100m
-          memory: 256Mi
-        limits:
-          cpu: 500m
+          cpu: 250m
           memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
 
   backups:
     pgbackrest:

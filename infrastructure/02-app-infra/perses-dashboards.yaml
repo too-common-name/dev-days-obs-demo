@@ -1,0 +1,239 @@
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: myreadings-service-health
+  namespace: myreadings-dev
+spec:
+  duration: "30m"
+  display:
+    name: "MyReadings — Service Health"
+
+  layouts:
+    - kind: "Grid"
+      spec:
+        display: { title: "Traffic", collapse: { open: true } }
+        items:
+          - x: 0
+            y: 0
+            width: 12
+            height: 6
+            content: { "$ref": "#/spec/panels/reqRate" }
+          - x: 12
+            y: 0
+            width: 12
+            height: 6
+            content: { "$ref": "#/spec/panels/errRate" }
+
+    - kind: "Grid"
+      spec:
+        display: { title: "Container Resources", collapse: { open: true } }
+        items:
+          - x: 0
+            y: 0
+            width: 12
+            height: 6
+            content: { "$ref": "#/spec/panels/memPercent" }
+          - x: 12
+            y: 0
+            width: 12
+            height: 6
+            content: { "$ref": "#/spec/panels/restarts" }
+
+    - kind: "Grid"
+      spec:
+        display: { title: "JVM Runtime", collapse: { open: true } }
+        items:
+          - x: 0
+            y: 0
+            width: 12
+            height: 6
+            content: { "$ref": "#/spec/panels/jvmHeap" }
+          - x: 12
+            y: 0
+            width: 12
+            height: 6
+            content: { "$ref": "#/spec/panels/jvmGC" }
+
+  panels:
+    reqRate:
+      kind: "Panel"
+      spec:
+        display:
+          name: "Request Rate"
+          description: "HTTP requests per second, by service"
+        plugin:
+          kind: "TimeSeriesChart"
+          spec:
+            legend: { position: "bottom" }
+            yAxis:
+              format:
+                unit: "requests/sec"
+        queries:
+          - kind: "TimeSeriesQuery"
+            spec:
+              plugin:
+                kind: "PrometheusTimeSeriesQuery"
+                spec:
+                  datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
+                  query: >-
+                    sum by (exported_job) (
+                      rate(http_server_request_duration_seconds_count{
+                        exported_job=~"myreadings-.*-service"
+                      }[2m])
+                    )
+
+    errRate:
+      kind: "Panel"
+      spec:
+        display:
+          name: "Error Rate"
+          description: "Percentage of HTTP 5xx responses"
+        plugin:
+          kind: "TimeSeriesChart"
+          spec:
+            legend: { position: "bottom" }
+            yAxis:
+              format:
+                unit: "percent"
+                decimalPlaces: 1
+        queries:
+          - kind: "TimeSeriesQuery"
+            spec:
+              plugin:
+                kind: "PrometheusTimeSeriesQuery"
+                spec:
+                  datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
+                  query: >-
+                    (
+                      sum by (exported_job) (
+                        rate(http_server_request_duration_seconds_count{
+                          exported_job=~"myreadings-.*-service",
+                          http_response_status_code=~"5.."
+                        }[2m])
+                      )
+                      /
+                      sum by (exported_job) (
+                        rate(http_server_request_duration_seconds_count{
+                          exported_job=~"myreadings-.*-service"
+                        }[2m])
+                      )
+                    ) * 100
+
+    memPercent:
+      kind: "Panel"
+      spec:
+        display:
+          name: "Memory Usage vs Limit"
+          description: "Working-set bytes as % of container memory limit"
+        plugin:
+          kind: "TimeSeriesChart"
+          spec:
+            legend: { position: "bottom" }
+            yAxis:
+              format:
+                unit: "percent"
+                decimalPlaces: 0
+        queries:
+          - kind: "TimeSeriesQuery"
+            spec:
+              plugin:
+                kind: "PrometheusTimeSeriesQuery"
+                spec:
+                  datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
+                  query: >-
+                    max by (container) (
+                      container_memory_working_set_bytes{
+                        namespace="myreadings-dev",
+                        container=~".*-service"
+                      }
+                      / on(container, pod, namespace) group_left
+                      kube_pod_container_resource_limits{
+                        namespace="myreadings-dev",
+                        resource="memory"
+                      }
+                    ) * 100
+
+    restarts:
+      kind: "Panel"
+      spec:
+        display:
+          name: "Container Restarts"
+          description: "Restart count over the last 5 minutes (OOMKill indicator)"
+        plugin:
+          kind: "TimeSeriesChart"
+          spec:
+            legend: { position: "bottom" }
+            yAxis:
+              format:
+                unit: "decimal"
+                decimalPlaces: 0
+        queries:
+          - kind: "TimeSeriesQuery"
+            spec:
+              plugin:
+                kind: "PrometheusTimeSeriesQuery"
+                spec:
+                  datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
+                  query: >-
+                    increase(
+                      kube_pod_container_status_restarts_total{
+                        namespace="myreadings-dev",
+                        container=~".*-service"
+                      }[5m]
+                    )
+
+    jvmHeap:
+      kind: "Panel"
+      spec:
+        display:
+          name: "JVM Heap Usage"
+          description: "Heap memory used, by service and memory pool"
+        plugin:
+          kind: "TimeSeriesChart"
+          spec:
+            legend: { position: "bottom" }
+            yAxis:
+              format:
+                unit: "bytes"
+        queries:
+          - kind: "TimeSeriesQuery"
+            spec:
+              plugin:
+                kind: "PrometheusTimeSeriesQuery"
+                spec:
+                  datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
+                  query: >-
+                    sum by (exported_job) (
+                      jvm_memory_used_bytes{
+                        exported_job=~"myreadings-.*-service",
+                        jvm_memory_type="heap"
+                      }
+                    )
+
+    jvmGC:
+      kind: "Panel"
+      spec:
+        display:
+          name: "GC Pause Time"
+          description: "Garbage collection duration rate (seconds spent in GC per second)"
+        plugin:
+          kind: "TimeSeriesChart"
+          spec:
+            legend: { position: "bottom" }
+            yAxis:
+              format:
+                unit: "seconds"
+                decimalPlaces: 3
+        queries:
+          - kind: "TimeSeriesQuery"
+            spec:
+              plugin:
+                kind: "PrometheusTimeSeriesQuery"
+                spec:
+                  datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
+                  query: >-
+                    sum by (exported_job) (
+                      rate(jvm_gc_duration_seconds_sum{
+                        exported_job=~"myreadings-.*-service"
+                      }[2m])
+                    )
