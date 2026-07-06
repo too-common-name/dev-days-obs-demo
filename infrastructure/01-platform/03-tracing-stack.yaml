@@ -1,5 +1,5 @@
 apiVersion: tempo.grafana.com/v1alpha1
-kind:  TempoStack
+kind: TempoStack
 metadata:
   name: platform
   namespace: openshift-tracing

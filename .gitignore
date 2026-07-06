@@ -1,6 +1,4 @@
-.cursor/rules/
 .cache/
 infrastructure/01-platform/_generated/
-test.yaml
 scenarios.txt
-doc/demo-script.md
+stress/test-results.txt

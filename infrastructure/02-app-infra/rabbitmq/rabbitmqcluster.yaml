@@ -21,8 +21,13 @@ spec:
       spec:
         template:
           spec:
+            securityContext: {}
+            initContainers:
+              - name: setup-container
+                securityContext: {}
             containers:
               - name: rabbitmq
+                securityContext: {}
                 startupProbe:
                   exec:
                     command:

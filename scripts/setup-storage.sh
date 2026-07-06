@@ -17,7 +17,7 @@ TEMPO_OBC="tempostack-demo-bucket"
 
 # Function to process a single stack
 process_secret() {
-    local TYPE=$1      # "loki", "tempo" or "netobserv"
+    local TYPE=$1      # "loki" or "tempo"
     local NS=$2        # Namespace
     local OBC_NAME=$3  # OBC Name
     local TEMPLATE_FILE="$TEMPLATE_DIR/$TYPE-secret.yaml"
@@ -30,9 +30,15 @@ process_secret() {
         exit 1
     fi
 
-    # Wait for OBC to be Bound
+    # Wait for OBC to be Bound (timeout 5 min)
     echo "   ⏳ Waiting for OBC '$OBC_NAME' to be Bound..."
+    local start_time=$(date +%s)
     while true; do
+        local elapsed=$(( $(date +%s) - start_time ))
+        if [[ $elapsed -gt 300 ]]; then
+            echo "      ❌ Timeout waiting for OBC '$OBC_NAME' after 300s"
+            exit 1
+        fi
         PHASE=$(oc get obc $OBC_NAME -n $NS -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
         if [[ "$PHASE" == "Bound" ]]; then
             echo "      ✅ OBC is Bound."
@@ -67,7 +73,7 @@ process_secret() {
     # Fill Template using yq
     echo "   📝 Generating secret manifest..."
     
-    if [[ "$TYPE" == "loki" ]] || [ "$TYPE" == "netobserv" ]; then
+    if [[ "$TYPE" == "loki" ]]; then
         yq eval "del(.stringData) | \
                  .data.bucketnames = \"$B64_BUCKET\" | \
                  .data.endpoint = \"$B64_ENDPOINT\" | \

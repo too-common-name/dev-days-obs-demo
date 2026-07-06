@@ -35,21 +35,26 @@ KC_CLIENT := myreadings-client
 KC_HOST  = $(shell $(OC) get route myreadings-keycloak -n $(APP_NS) -o jsonpath='https://{.spec.host}' 2>/dev/null)
 APP_HOST = $(shell $(OC) get route myreadings-ui -n $(APP_NS) -o jsonpath='https://{.spec.host}' 2>/dev/null)
 
+# --- Storage (override for clusters with different SC names) ---
+STORAGE_CLASS_BLOCK ?= ocs-external-storagecluster-ceph-rbd
+STORAGE_CLASS_OBC   ?= openshift-storage.noobaa.io
+USE_OBC             ?= true
+
 # --- Stress test (override via env or CLI) ---
-KC_USERNAME    ?= drossi
-KC_PASSWORD    ?= drossi
-LOCUST_USERS   ?= 30
-LOCUST_RATE    ?= 5
-LOCUST_TIME    ?= 8m
+KC_USERNAME    ?= testuser
+KC_PASSWORD    ?= testuser
 
 _ := $(shell chmod +x $(SCRIPTS_DIR)/*.sh 2>/dev/null)
 
+# --- RabbitMQ (installed from upstream manifest, not OLM) ---
+RABBITMQ_OPERATOR_URL := https://github.com/rabbitmq/cluster-operator/releases/latest/download/cluster-operator.yml
+
 .PHONY: help check-tools \
-	deploy-operators delete-operators \
+	deploy-operators deploy-platform-operators deploy-app-operators delete-operators \
 	deploy-platform deploy-infra deploy-app deploy-all \
 	stress break fix fix-all prep-demo \
 	fix-postgres \
-	destroy-app destroy-infra destroy-all
+	destroy-app destroy-infra destroy-platform destroy-all
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -59,19 +64,39 @@ check-tools: ## Verify required CLI tools are installed
 	@which $(OC) > /dev/null   || (echo "Error: oc not found"   && exit 1)
 	@which $(YQ) > /dev/null   || (echo "Error: yq not found"   && exit 1)
 	@which $(HELM) > /dev/null || (echo "Error: helm not found" && exit 1)
+	@which git > /dev/null     || (echo "Error: git not found"  && exit 1)
+	@which $(PODMAN) > /dev/null || (echo "Error: podman not found" && exit 1)
+	@which python3 > /dev/null || (echo "Error: python3 not found" && exit 1)
+	@which curl > /dev/null    || (echo "Error: curl not found" && exit 1)
+	@which envsubst > /dev/null || (echo "Error: envsubst not found (install gettext)" && exit 1)
 	@echo "Cluster: $$($(OC) whoami --show-server)"
 
 # ====================================================================================
 #  LAYER 0 -- OPERATORS
 # ====================================================================================
 
-deploy-operators: check-tools ## Install all operators (o11y + Crunchy + RHBK + RabbitMQ)
-	@echo "[Layer 0] Installing Operators..."
-	@$(OC) apply -R -f $(OPERATORS_DIR)
-	@./$(SCRIPTS_DIR)/wait-for-operators.sh
+deploy-platform-operators: check-tools ## Install o11y operators only
+	@echo "[Layer 0a] Installing platform operators..."
+	@$(OC) apply -R -f $(OPERATORS_DIR)/platform
+	@./$(SCRIPTS_DIR)/wait-for-operators.sh platform
+
+deploy-app-operators: check-tools ## Install app operators (Crunchy + RHBK + RabbitMQ)
+	@echo "[Layer 0b] Installing app operators..."
+	@$(OC) apply -f $(APP_INFRA_DIR)/namespace.yaml
+	@$(OC) apply -R -f $(OPERATORS_DIR)/app
+	@$(OC) apply -f $(RABBITMQ_OPERATOR_URL)
+	@./$(SCRIPTS_DIR)/wait-for-operators.sh app
+
+deploy-operators: deploy-platform-operators deploy-app-operators ## Install all operators
 
 delete-operators: check-tools ## Uninstall operator subscriptions
-	@$(OC) delete -R -f $(OPERATORS_DIR) --ignore-not-found
+	@$(OC) delete -R -f $(OPERATORS_DIR)/platform --ignore-not-found
+	@$(OC) delete -R -f $(OPERATORS_DIR)/app --ignore-not-found
+	@$(OC) delete -f $(RABBITMQ_OPERATOR_URL) --ignore-not-found
+	@echo "Cleaning orphaned CSVs..."
+	@$(OC) delete csv -n openshift-operators -l operators.coreos.com/crunchy-postgres-operator.openshift-operators= --ignore-not-found 2>/dev/null || \
+		($(OC) get csv -n openshift-operators -o name 2>/dev/null | grep postgres | xargs -r $(OC) delete -n openshift-operators --ignore-not-found 2>/dev/null || true)
+	@$(OC) get csv -n rhbk-operator -o name 2>/dev/null | grep rhbk | xargs -r $(OC) delete -n rhbk-operator --ignore-not-found 2>/dev/null || true
 
 # ====================================================================================
 #  LAYER 1 -- PLATFORM (cluster-wide observability + OLS)
@@ -83,14 +108,24 @@ deploy-platform: check-tools ## Deploy UWM, Loki, Tempo, Korrel8r, Perses, MCP, 
 	@$(OC) apply -f $(INCIDENT_MCP_BASE_URL)/02_deployment.yaml
 	@$(OC) apply -f $(INCIDENT_MCP_BASE_URL)/03_mcp_service.yaml
 	@$(OC) apply -f $(PLATFORM_DIR)/00-monitoring-config.yaml
-	@$(OC) apply -f $(PLATFORM_DIR)/01-storage-claims.yaml
-	@./$(SCRIPTS_DIR)/setup-storage.sh
-	@$(OC) apply -f $(PLATFORM_DIR)/02-logging-stack.yaml
+	@if [ "$(USE_OBC)" = "true" ]; then \
+		sed 's|openshift-storage.noobaa.io|$(STORAGE_CLASS_OBC)|g' $(PLATFORM_DIR)/01-storage-claims.yaml | $(OC) apply -f -; \
+		./$(SCRIPTS_DIR)/setup-storage.sh; \
+	else \
+		echo "Skipping OBC (USE_OBC=false). Ensure Loki/Tempo secrets exist."; \
+	fi
+	@sed 's|ocs-external-storagecluster-ceph-rbd|$(STORAGE_CLASS_BLOCK)|g' $(PLATFORM_DIR)/02-logging-stack.yaml | $(OC) apply -f -
 	@$(OC) apply -f $(PLATFORM_DIR)/03-tracing-stack.yaml
 	@$(OC) apply -f $(PLATFORM_DIR)/04-ui-plugins.yaml
 	@$(OC) apply -f $(PLATFORM_DIR)/05-korrel8r-otel-rules.yaml
+	@echo "Waiting for Korrel8r deployment..."
+	@for i in $$(seq 1 30); do \
+		$(OC) get deployment korrel8r -n openshift-cluster-observability-operator >/dev/null 2>&1 && break; \
+		sleep 10; \
+	done
 	@$(OC) apply --server-side --field-manager=korrel8r-otel-customization --force-conflicts \
-		-f $(PLATFORM_DIR)/06-korrel8r-deployment-patch.yaml
+		-f $(PLATFORM_DIR)/06-korrel8r-deployment-patch.yaml 2>/dev/null || \
+		echo "Korrel8r deployment not found (apply patch manually later)."
 	@$(OC) apply -f $(PLATFORM_DIR)/07-perses-datasource.yaml
 	@# --- OLS ---
 	@CSV=$$($(OC) get csv -n openshift-lightspeed -o jsonpath='{.items[?(@.spec.displayName=="OpenShift Lightspeed Operator")].metadata.name}' 2>/dev/null); \
@@ -120,8 +155,8 @@ deploy-infra: check-tools ## Deploy backing services, wait, configure, enable gr
 	@echo "[Layer 2a] Deploying infrastructure..."
 	@$(OC) apply -f $(APP_INFRA_DIR)/namespace.yaml
 	@$(OC) apply -f $(APP_INFRA_DIR)/perses-dashboards.yaml
-	@$(OC) apply -f $(APP_INFRA_DIR)/postgres/scc-anyuid.yaml
-	@$(OC) apply -f $(APP_INFRA_DIR)/rabbitmq/scc-anyuid.yaml
+	@$(OC) apply -f $(APP_INFRA_DIR)/postgres/scc-privileged.yaml
+	@$(OC) apply -f $(APP_INFRA_DIR)/rabbitmq/scc-privileged.yaml
 	@$(OC) apply -f $(APP_INFRA_DIR)/postgres/init-sql.yaml          -n $(APP_NS)
 	@$(OC) apply -f $(APP_INFRA_DIR)/postgres/postgrescluster.yaml   -n $(APP_NS)
 	@$(OC) apply -f $(APP_INFRA_DIR)/rabbitmq/rabbitmqcluster.yaml   -n $(APP_NS)
@@ -136,25 +171,16 @@ deploy-infra: check-tools ## Deploy backing services, wait, configure, enable gr
 	@$(OC) apply -f $(APP_INFRA_DIR)/keycloak/route.yaml    -n $(APP_NS)
 	@echo "Waiting for infrastructure pods..."
 	@$(OC) wait --for=condition=Ready pod -l postgres-operator.crunchydata.com/instance-set=instance1 -n $(APP_NS) --timeout=300s
-	@$(OC) wait --for=condition=Ready pod -l app.kubernetes.io/component=rabbitmq -n $(APP_NS) --timeout=300s
+	@$(OC) wait --for=condition=Ready pod -l app.kubernetes.io/name=myreadings-rabbitmq -n $(APP_NS) --timeout=300s
 	@$(OC) wait --for=condition=Ready pod -l app=keycloak -n $(APP_NS) --timeout=300s
 	@echo "Running configuration jobs..."
+	@APPS_DOMAIN=$$($(OC) get ingresses.config/cluster -o jsonpath='{.spec.domain}'); \
+	$(OC) create configmap myreadings-app-config \
+		--from-literal=FRONTEND_URL="https://myreadings-ui-$(APP_NS).$$APPS_DOMAIN" \
+		--from-literal=KC_TEST_USER="$(KC_USERNAME)" \
+		--from-literal=KC_TEST_PASSWORD="$(KC_PASSWORD)" \
+		-n $(APP_NS) --dry-run=client -o yaml | $(OC) apply -f -
 	@$(OC) apply -f $(APP_INFRA_DIR)/config-jobs/ -n $(APP_NS)
-	@echo "Enabling Keycloak Direct Access Grants..."
-	@sleep 10
-	@ADMIN_TOKEN=$$(curl -sk -X POST "$(KC_HOST)/realms/master/protocol/openid-connect/token" \
-		-d "grant_type=password&client_id=admin-cli&username=temp-admin&password=$$($(OC) get secret myreadings-keycloak-initial-admin -n $(APP_NS) -o jsonpath='{.data.password}' | base64 -d)" \
-		| python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))"); \
-	if [ -n "$$ADMIN_TOKEN" ]; then \
-		CLIENT_UUID=$$(curl -sk -H "Authorization: Bearer $$ADMIN_TOKEN" \
-			"$(KC_HOST)/admin/realms/$(KC_REALM)/clients?clientId=$(KC_CLIENT)" \
-			| python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])"); \
-		curl -sk -X PUT -H "Authorization: Bearer $$ADMIN_TOKEN" -H "Content-Type: application/json" \
-			"$(KC_HOST)/admin/realms/$(KC_REALM)/clients/$$CLIENT_UUID" \
-			-d '{"directAccessGrantsEnabled": true}' -o /dev/null; \
-	else \
-		echo "Keycloak realm not ready yet. Run 'make enable-direct-grants' later."; \
-	fi
 	@echo "Infrastructure deployed."
 
 # ====================================================================================
@@ -165,7 +191,6 @@ $(HELM_CHART_DIR):
 	@git clone --depth 1 -b $(HELM_REF) $(HELM_REPO) $(HELM_CHART_DIR)
 
 deploy-app: check-tools $(HELM_CHART_DIR) ## Deploy microservices via Helm (chart from GitHub)
-	@$(OC) scale deployment myreadings-app -n $(APP_NS) --replicas=0 2>/dev/null || true
 	@KC_ISSUER="$$($(OC) get route myreadings-keycloak -n $(APP_NS) -o jsonpath='https://{.spec.host}/realms/$(KC_REALM)')"; \
 	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --wait --timeout 5m \
 		--set keycloak.tokenIssuer="$$KC_ISSUER"
@@ -184,8 +209,8 @@ break: check-tools $(HELM_CHART_DIR) ## Inject N+1 + constrain resources
 		--set catalog.resources.limits.cpu=200m \
 		--set catalog.resources.requests.memory=96Mi \
 		--set catalog.resources.limits.memory=192Mi \
-		--set readinglist.resources.requests.cpu=30m \
-		--set readinglist.resources.limits.cpu=80m \
+		--set readinglist.resources.requests.cpu=50m \
+		--set readinglist.resources.limits.cpu=100m \
 		--set readinglist.resources.requests.memory=48Mi \
 		--set readinglist.resources.limits.memory=96Mi
 	@$(OC) rollout status deployment/catalog-service -n $(APP_NS) --timeout=120s
@@ -206,7 +231,9 @@ fix: check-tools $(HELM_CHART_DIR) ## Restore everything (single helm upgrade)
 	@$(OC) rollout status deployment/readinglist-service -n $(APP_NS) --timeout=120s
 	@echo "All restored."
 
-prep-demo: check-tools ## Pause OLS operator and enable traces toolset
+DEMO_PROMPT := $(PLATFORM_DIR)/templates/ols-demo-prompt.txt
+
+prep-demo: check-tools ## Pause OLS operator, enable traces toolset, apply demo prompt
 	@echo "Pausing OLS operator..."
 	@$(OC) scale deployment $(OLS_OPERATOR_DEPLOY) -n $(OLS_NS) --replicas=0
 	@echo "Enabling traces toolset in MCP server..."
@@ -222,14 +249,14 @@ prep-demo: check-tools ## Pause OLS operator and enable traces toolset
 	@echo "OLS restarting with traces enabled (~60s)."
 
 fix-all: fix ## Full reset: fix app + unpause OLS operator (reconciles prompt + toolsets)
-	@echo "Unpausing OLS operator (will reconcile config)..."
+	@echo "Unpausing OLS operator."
 	@$(OC) scale deployment $(OLS_OPERATOR_DEPLOY) -n $(OLS_NS) --replicas=1
-	@echo "All restored. Operator will reconcile OLS config automatically."
+	@echo "All restored."
 
-stress: check-tools 
+stress: check-tools ## Run Locust load test via Podman
 	@test -n "$(KC_USERNAME)" || (echo "Error: set KC_USERNAME and KC_PASSWORD" && exit 1)
 	@$(PODMAN) rm -f myreadings-locust 2>/dev/null || true
-	$(PODMAN) run -d --name myreadings-locust --network host -v ./stress:/stress:Z \
+	@$(PODMAN) run -d --name myreadings-locust --network host -v ./stress:/stress:Z \
 		-e KC_TOKEN_URL="$(KC_HOST)/realms/$(KC_REALM)/protocol/openid-connect/token" \
 		-e KC_CLIENT_ID="$(KC_CLIENT)" \
 		-e KC_USERNAME="$(KC_USERNAME)" \
@@ -257,11 +284,33 @@ fix-postgres: check-tools ## Fix Postgres after cluster reboot (Patroni standby.
 destroy-app: check-tools ## Uninstall Helm release (keeps infra)
 	@$(HELM) uninstall $(HELM_RELEASE) -n $(APP_NS) || true
 
-destroy-infra: check-tools ## Delete Postgres, Keycloak, RabbitMQ
-	@$(OC) delete -f $(APP_INFRA_DIR)/config-jobs/                 -n $(APP_NS) --ignore-not-found
-	@$(OC) delete -f $(APP_INFRA_DIR)/keycloak/keycloak.yaml       -n $(APP_NS) --ignore-not-found
-	@$(OC) delete -f $(APP_INFRA_DIR)/keycloak/route.yaml          -n $(APP_NS) --ignore-not-found
+destroy-infra: check-tools ## Delete Postgres, Keycloak, RabbitMQ, dashboards, SCC, namespace
+	@$(OC) delete -f $(APP_INFRA_DIR)/config-jobs/                  -n $(APP_NS) --ignore-not-found
+	@$(OC) delete -f $(APP_INFRA_DIR)/keycloak/keycloak.yaml        -n $(APP_NS) --ignore-not-found
+	@$(OC) delete -f $(APP_INFRA_DIR)/keycloak/route.yaml           -n $(APP_NS) --ignore-not-found
 	@$(OC) delete -f $(APP_INFRA_DIR)/rabbitmq/rabbitmqcluster.yaml -n $(APP_NS) --ignore-not-found
 	@$(OC) delete -f $(APP_INFRA_DIR)/postgres/postgrescluster.yaml -n $(APP_NS) --ignore-not-found
+	@$(OC) delete -f $(APP_INFRA_DIR)/postgres/init-sql.yaml        -n $(APP_NS) --ignore-not-found
+	@$(OC) delete configmap myreadings-app-config                   -n $(APP_NS) --ignore-not-found
+	@$(OC) delete -f $(APP_INFRA_DIR)/perses-dashboards.yaml                     --ignore-not-found
+	@$(OC) delete -f $(APP_INFRA_DIR)/postgres/scc-privileged.yaml               --ignore-not-found
+	@$(OC) delete -f $(APP_INFRA_DIR)/rabbitmq/scc-privileged.yaml               --ignore-not-found
+	@$(OC) delete -f $(APP_INFRA_DIR)/namespace.yaml                             --ignore-not-found
 
-destroy-all: destroy-app destroy-infra ## Delete app + infra (keeps operators & platform)
+destroy-platform: check-tools ## Delete platform stack (Loki, Tempo, Korrel8r, OLS, MCP, UI plugins)
+	@$(OC) delete -f $(PLATFORM_DIR)/07-perses-datasource.yaml --ignore-not-found
+	@$(OC) delete -f $(PLATFORM_DIR)/06-korrel8r-deployment-patch.yaml --ignore-not-found 2>/dev/null || true
+	@$(OC) delete -f $(PLATFORM_DIR)/05-korrel8r-otel-rules.yaml --ignore-not-found
+	@$(OC) delete -f $(PLATFORM_DIR)/04-ui-plugins.yaml --ignore-not-found
+	@$(OC) delete -f $(PLATFORM_DIR)/03-tracing-stack.yaml --ignore-not-found
+	@$(OC) delete -f $(PLATFORM_DIR)/02-logging-stack.yaml --ignore-not-found
+	@$(OC) delete -f $(PLATFORM_DIR)/01-storage-claims.yaml --ignore-not-found
+	@$(OC) delete -f $(PLATFORM_DIR)/00-monitoring-config.yaml --ignore-not-found
+	@$(OC) delete -f $(PLATFORM_DIR)/_generated/ols-config.yaml --ignore-not-found --timeout=30s 2>/dev/null || \
+		($(OC) patch olsconfig cluster --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true)
+	@$(OC) delete -f $(INCIDENT_MCP_BASE_URL)/03_mcp_service.yaml --ignore-not-found 2>/dev/null || true
+	@$(OC) delete -f $(INCIDENT_MCP_BASE_URL)/02_deployment.yaml --ignore-not-found 2>/dev/null || true
+	@$(OC) delete -f $(INCIDENT_MCP_BASE_URL)/01_service_account.yaml --ignore-not-found 2>/dev/null || true
+	@echo "Platform stack removed."
+
+destroy-all: destroy-app destroy-infra destroy-platform delete-operators ## Full cleanup: app + infra + platform + operators

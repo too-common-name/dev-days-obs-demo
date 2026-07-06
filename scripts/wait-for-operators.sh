@@ -1,63 +1,75 @@
 #!/bin/bash
 set -e
 
-# Namespaces where Operators might be installed (check the file 00-project foreach operator folder in 00-operators)
-NAMESPACES=("openshift-cluster-observability-operator" "openshift-operators-redhat" "openshift-logging" "openshift-opentelemetry-operator" "openshift-tracing" "openshift-netobserv-operator" "openshift-lightspeed")
+GROUP="${1:-all}"
+
+PLATFORM_SUBS=("cluster-observability-operator:openshift-cluster-observability-operator" "loki-operator:openshift-operators-redhat" "opentelemetry-product:openshift-opentelemetry-operator" "tempo-operator:openshift-tracing" "lightspeed-operator:openshift-lightspeed")
+APP_SUBS=("crunchy-postgres-operator:openshift-operators" "rhbk-operator:rhbk-operator")
+
+case "$GROUP" in
+    platform) SUBS=("${PLATFORM_SUBS[@]}") ;;
+    app)      SUBS=("${APP_SUBS[@]}") ;;
+    *)        SUBS=("${PLATFORM_SUBS[@]}" "${APP_SUBS[@]}") ;;
+esac
+
 TIMEOUT_SECONDS=300
 
-echo "⏳ Checking Operator installation status..."
+echo "⏳ Checking Operator installation status (group: $GROUP)..."
 
-for ns in "${NAMESPACES[@]}"; do
-    # Check if namespace exists
-    if ! oc get project "$ns" &> /dev/null; then
-        echo "   - Namespace $ns does not exist. Skipping."
-        continue
-    fi
+for entry in "${SUBS[@]}"; do
+    sub="${entry%%:*}"
+    ns="${entry##*:}"
 
-    echo "   🔍 Checking namespace: $ns"
-    
-    # Get all Subscription names in this namespace
-    SUBS=$(oc get sub -n "$ns" -o jsonpath='{.items[*].metadata.name}')
+    echo "   👉 Verifying $sub in $ns..."
 
-    if [[ -z "$SUBS" ]]; then
-        echo "      - No Subscriptions found in $ns."
-        continue
-    fi
+    start_time=$(date +%s)
+    while true; do
+        current_time=$(date +%s)
+        elapsed=$((current_time - start_time))
 
-    for sub in $SUBS; do
-        echo "      👉 Verifying Subscription: $sub"
-        
-        start_time=$(date +%s)
-        while true; do
-            current_time=$(date +%s)
-            elapsed=$((current_time - start_time))
+        if [[ $elapsed -gt $TIMEOUT_SECONDS ]]; then
+            echo "      ❌ Timeout waiting for Subscription '$sub' in '$ns' after ${TIMEOUT_SECONDS}s"
+            exit 1
+        fi
 
-            if [[ $elapsed -gt $TIMEOUT_SECONDS ]]; then
-                echo "      ❌ Timeout waiting for Subscription '$sub' in '$ns' after ${TIMEOUT_SECONDS}s"
-                exit 1
-            fi
+        CSV_NAME=$(oc get sub "$sub" -n "$ns" -o jsonpath='{.status.currentCSV}' 2>/dev/null)
 
-            # Find the CSV name linked to this Subscription
-            CSV_NAME=$(oc get sub "$sub" -n "$ns" -o jsonpath='{.status.currentCSV}')
+        if [[ -z "$CSV_NAME" ]]; then
+            echo "      - Waiting for OLM to resolve $sub..."
+            sleep 5
+            continue
+        fi
 
-            if [[ -z "$CSV_NAME" ]]; then
-                echo "        - Waiting for OLM to resolve install plan for $sub..."
-                sleep 5
-                continue
-            fi
+        PHASE=$(oc get csv "$CSV_NAME" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
 
-            # Check status of CSV
-            PHASE=$(oc get csv "$CSV_NAME" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-
-            if [[ "$PHASE" == "Succeeded" ]]; then
-                echo "        ✅ $CSV_NAME is Succeeded."
-                break
-            else
-                echo "        - $CSV_NAME status is '$PHASE'..."
-                sleep 5
-            fi
-        done
+        if [[ "$PHASE" == "Succeeded" ]]; then
+            echo "      ✅ $CSV_NAME is Succeeded."
+            break
+        else
+            echo "      - $CSV_NAME status is '$PHASE'..."
+            sleep 5
+        fi
     done
 done
 
-echo "🚀 All Subscribed Operators are ready."
+if [[ "$GROUP" == "app" || "$GROUP" == "all" ]]; then
+    echo "   👉 Verifying RabbitMQ operator (non-OLM)..."
+    start_time=$(date +%s)
+    while true; do
+        current_time=$(date +%s)
+        elapsed=$((current_time - start_time))
+        if [[ $elapsed -gt $TIMEOUT_SECONDS ]]; then
+            echo "      ❌ Timeout waiting for RabbitMQ operator"
+            exit 1
+        fi
+        READY=$(oc get deployment rabbitmq-cluster-operator -n rabbitmq-system -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+        if [[ "$READY" -ge 1 ]]; then
+            echo "      ✅ RabbitMQ operator is ready."
+            break
+        fi
+        echo "      - Waiting for RabbitMQ operator deployment..."
+        sleep 5
+    done
+fi
+
+echo "🚀 All operators are ready (group: $GROUP)."

@@ -2,7 +2,6 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: configure-keycloak
-  annotations:
   labels:
     app.kubernetes.io/part-of: myreadings
     app.kubernetes.io/component: config
@@ -52,7 +51,9 @@ spec:
                 -e "keycloak_client=myreadings-client" \
                 -e "keycloak_client_display_name=My Readings Application" \
                 -e "keycloak_allow_registration=true" \
-                -e "frontend_url=$FRONTEND_URL"
+                -e "frontend_url=$FRONTEND_URL" \
+                -e "test_user=$KC_TEST_USER" \
+                -e "test_password=$KC_TEST_PASSWORD"
           env:
             - name: APP_NAMESPACE
               valueFrom:
@@ -63,6 +64,18 @@ spec:
                 configMapKeyRef:
                   name: myreadings-app-config
                   key: FRONTEND_URL
+            - name: KC_TEST_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: myreadings-app-config
+                  key: KC_TEST_USER
+                  optional: true
+            - name: KC_TEST_PASSWORD
+              valueFrom:
+                configMapKeyRef:
+                  name: myreadings-app-config
+                  key: KC_TEST_PASSWORD
+                  optional: true
           volumeMounts:
             - name: workspace
               mountPath: /workspace

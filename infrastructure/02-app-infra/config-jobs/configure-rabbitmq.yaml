@@ -2,7 +2,6 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: configure-rabbitmq
-  annotations:
   labels:
     app.kubernetes.io/part-of: myreadings
     app.kubernetes.io/component: config
