@@ -22,7 +22,7 @@ spec:
       url: "${LLM_URL}"
       models:
       - name: "${LLM_MODEL}"
-        contextWindowSize: 262144
+        contextWindowSize: ${LLM_CONTEXT_WINDOW}
   mcpServers:
   - name: cluster-health
     url: 'http://cluster-health-mcp-server.openshift-cluster-observability-operator.svc:8085/mcp'

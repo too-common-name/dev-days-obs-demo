@@ -461,14 +461,14 @@
      text-anchor="middle"
      font-size="10"
      fill="#333"
-     id="text32">PR #12: &quot;Reduce JVM service memory limits&quot;</text>
+     id="text32">PR #12: &quot;Rightsize readinglist-service resources&quot;</text>
   <text
      x="1000"
      y="272"
      text-anchor="middle"
      font-size="9"
      fill="#777"
-     id="text33">values.yaml: 4 lines changed</text>
+     id="text33">values.yaml: 2 lines changed</text>
   <line
      x1="999.44672"
      y1="143.15025"
@@ -502,13 +502,13 @@
      y="332"
      font-size="8"
      fill="#555"
-     id="text35">- Grafana screenshot: services never exceed 250 MiB</text>
+     id="text35">- Grafana screenshot: readinglist never exceeds 80 MiB</text>
   <text
      x="882"
      y="344"
      font-size="8"
      fill="#555"
-     id="text36">- 256 MiB limit looks like safe headroom</text>
+     id="text36">- Native image uses less memory, 96 MiB seems safe</text>
   <text
      x="882"
      y="356"
@@ -547,13 +547,13 @@
      y="412"
      font-size="9"
      fill="#c62828"
-     id="text39">- catalog: cpu 1→200m mem 256→192Mi</text>
+     id="text39">- readinglist: cpu 500m→90m mem 256→96Mi</text>
   <text
      x="882"
      y="426"
      font-size="9"
      fill="#c62828"
-     id="text40">- readinglist: cpu 500m→80m mem 256→96Mi</text>
+     id="text40">  </text>
   <text
      x="882"
      y="434"
@@ -595,14 +595,14 @@
      text-anchor="middle"
      font-size="9"
      fill="#555"
-     id="text43">Native images need less memory, but CPU/mem are both slashed</text>
+     id="text43">readinglist: 90m CPU + 96Mi memory = starvation under load</text>
   <text
      x="1000"
      y="508"
      text-anchor="middle"
      font-size="9"
      fill="#888"
-     id="text44">readinglist: 80m CPU = instant throttling under any load</text>
+     id="text44">OOMKilled restarts + CPU throttling → cascading failures</text>
   <line
      x1="1000"
      y1="440"
@@ -790,7 +790,7 @@
      text-anchor="middle"
      font-size="8px"
      fill="#c62828"
-     id="text61">N+1 + mem pressure</text>
+     id="text61">N+1 query pattern</text>
   <text
      x="395"
      y="770"

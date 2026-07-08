@@ -43,7 +43,7 @@ class MyReadingsUser(HttpUser):
         return {"Authorization": f"Bearer {self.token}"}
 
     # ---- search (hits catalog-service, triggers N+1 when broken) ----
-    @task(3)
+    @task(5)
     def search_books(self):
         term = random.choice(SEARCH_TERMS)
         with self.client.get(
@@ -65,7 +65,7 @@ class MyReadingsUser(HttpUser):
                         self.book_ids = self.book_ids[:40]
 
     # ---- reading lists (hits readinglist-service, OOMKills when constrained) ----
-    @task(3)
+    @task(5)
     def get_reading_lists(self):
         with self.client.get(
             "/api/v1/readinglists",
@@ -92,20 +92,20 @@ class MyReadingsUser(HttpUser):
     #         name="/api/v1/books",
     #     )
 
-    # ---- book detail + reviews (hits catalog + review-service) ----
-    @task(1)
-    def book_detail(self):
-        if not self.book_ids:
-            return
-        book_id = random.choice(self.book_ids)
-        self.client.get(
-            f"/api/v1/reviews/books/{book_id}/stats",
-            headers=self._headers(),
-            verify=False,
-            name="/api/v1/reviews/books/{bookId}/stats",
-        )
+    # # ---- book detail + reviews (hits catalog + review-service) ----
+    # @task(1)
+    # def book_detail(self):
+    #     if not self.book_ids:
+    #         return
+    #     book_id = random.choice(self.book_ids)
+    #     self.client.get(
+    #         f"/api/v1/reviews/books/{book_id}/stats",
+    #         headers=self._headers(),
+    #         verify=False,
+    #         name="/api/v1/reviews/books/{bookId}/stats",
+    #     )
 
-    # ---- Refresh token periodically ----
-    @task(1)
-    def refresh_token(self):
-        self._fetch_token()
+    # # ---- Refresh token periodically ----
+    # @task(1)
+    # def refresh_token(self):
+    #     self._fetch_token()

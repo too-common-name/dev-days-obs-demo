@@ -119,8 +119,8 @@ spec:
         kind: "Panel"
         spec:
           display:
-            name: "Memory Usage vs Limit"
-            description: "Working-set bytes as % of container memory limit"
+            name: "Memory Usage vs Limit (worst pod)"
+            description: "Highest per-pod working-set bytes as % of memory limit"
           plugin:
             kind: "TimeSeriesChart"
             spec:
@@ -137,21 +137,17 @@ spec:
                   spec:
                     datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
                     query: >-
-                      (
-                        sum by (container) (
-                          container_memory_working_set_bytes{
-                            namespace="myreadings-dev",
-                            container=~"(catalog|readinglist|review|user)-service"
-                          }
-                        )
-                        /
-                        sum by (container) (
-                          kube_pod_container_resource_limits{
-                            namespace="myreadings-dev",
-                            container=~"(catalog|readinglist|review|user)-service",
-                            resource="memory"
-                          }
-                        )
+                      max by (container) (
+                        container_memory_working_set_bytes{
+                          namespace="myreadings-dev",
+                          container=~"(catalog|readinglist|review|user)-service"
+                        }
+                        / on(container, pod, namespace) group_left()
+                        kube_pod_container_resource_limits{
+                          namespace="myreadings-dev",
+                          container=~"(catalog|readinglist|review|user)-service",
+                          resource="memory"
+                        }
                       ) * 100
 
       restarts:
@@ -221,8 +217,8 @@ spec:
         kind: "Panel"
         spec:
           display:
-            name: "CPU Usage vs Limit"
-            description: "CPU usage as % of container CPU limit"
+            name: "CPU Usage vs Limit (worst pod)"
+            description: "Highest per-pod CPU usage as % of CPU limit"
           plugin:
             kind: "TimeSeriesChart"
             spec:
@@ -239,19 +235,15 @@ spec:
                   spec:
                     datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
                     query: >-
-                      (
-                        sum by (container) (
-                          rate(container_cpu_usage_seconds_total{
-                            namespace="myreadings-dev",
-                            container=~"(catalog|readinglist|review|user)-service"
-                          }[2m])
-                        )
-                        /
-                        sum by (container) (
-                          kube_pod_container_resource_limits{
-                            namespace="myreadings-dev",
-                            container=~"(catalog|readinglist|review|user)-service",
-                            resource="cpu"
-                          }
-                        )
+                      max by (container) (
+                        rate(container_cpu_usage_seconds_total{
+                          namespace="myreadings-dev",
+                          container=~"(catalog|readinglist|review|user)-service"
+                        }[2m])
+                        / on(container, pod, namespace) group_left()
+                        kube_pod_container_resource_limits{
+                          namespace="myreadings-dev",
+                          container=~"(catalog|readinglist|review|user)-service",
+                          resource="cpu"
+                        }
                       ) * 100

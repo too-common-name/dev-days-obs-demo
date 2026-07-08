@@ -135,13 +135,16 @@ deploy-platform: check-tools ## Deploy UWM, Loki, Tempo, Korrel8r, Perses, MCP, 
 			$(OC) replace -f -; \
 	fi
 	@if [ -n "$(LLM_URL)" ] && [ -n "$(LLM_API_TOKEN)" ]; then \
-		model_name=$$(curl -sk "$(LLM_URL)/models" -H "Authorization: Bearer $(LLM_API_TOKEN)" | yq '.data[0].id'); \
+		model_info=$$(curl -sk "$(LLM_URL)/models" -H "Authorization: Bearer $(LLM_API_TOKEN)"); \
+		model_name=$$(echo "$$model_info" | yq '.data[0].id'); \
+		ctx_window=$$(echo "$$model_info" | yq -r '.data[0].max_model_len // 131072'); \
 		export LLM_URL="$(LLM_URL)" \
 			   LLM_API_TOKEN="$$(echo -n '$(LLM_API_TOKEN)' | base64 -w0)" \
-			   LLM_MODEL="$$model_name"; \
+			   LLM_MODEL="$$model_name" \
+			   LLM_CONTEXT_WINDOW="$$ctx_window"; \
 		envsubst < $(PLATFORM_DIR)/templates/ols-config.yaml > $(PLATFORM_DIR)/_generated/ols-config.yaml; \
 		$(OC) apply -f $(PLATFORM_DIR)/_generated/ols-config.yaml; \
-		echo "OLS configured (model: $$model_name)."; \
+		echo "OLS configured (model: $$model_name, context: $$ctx_window)."; \
 	else \
 		echo "OLS skipped (set LLM_URL and LLM_API_TOKEN to enable)."; \
 	fi
@@ -205,12 +208,8 @@ deploy-all: deploy-operators deploy-platform deploy-infra deploy-app ## Full ins
 break: check-tools $(HELM_CHART_DIR) ## Inject N+1 + constrain resources
 	@$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --reuse-values \
 		--set catalog.searchStrategy=broken \
-		--set catalog.resources.requests.cpu=100m \
-		--set catalog.resources.limits.cpu=200m \
-		--set catalog.resources.requests.memory=96Mi \
-		--set catalog.resources.limits.memory=192Mi \
 		--set readinglist.resources.requests.cpu=50m \
-		--set readinglist.resources.limits.cpu=100m \
+		--set readinglist.resources.limits.cpu=75m \
 		--set readinglist.resources.requests.memory=48Mi \
 		--set readinglist.resources.limits.memory=96Mi
 	@$(OC) rollout status deployment/catalog-service -n $(APP_NS) --timeout=120s
@@ -245,6 +244,14 @@ prep-demo: check-tools ## Pause OLS operator, enable traces toolset, apply demo 
 				if '\"traces\"' not in toml else toml; \
 			cm['data']['config.toml']=toml; json.dump(cm,sys.stdout)" | \
 		$(OC) replace -f -
+	@if [ -f "$(DEMO_PROMPT)" ]; then \
+		echo "Applying demo prompt..."; \
+		$(OC) get configmap olsconfig -n $(OLS_NS) -o json | \
+			python3 -c "import sys,json; cm=json.load(sys.stdin); \
+				cm['data']['system_prompt']=open('$(DEMO_PROMPT)').read(); \
+				json.dump(cm,sys.stdout)" | \
+			$(OC) replace -f -; \
+	fi
 	@$(OC) delete pod -n $(OLS_NS) -l $(OLS_APP_LABEL) --wait=false
 	@echo "OLS restarting with traces enabled (~60s)."
 
