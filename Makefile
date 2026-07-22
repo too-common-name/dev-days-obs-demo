@@ -208,6 +208,7 @@ deploy-all: deploy-operators deploy-platform deploy-infra deploy-app ## Full ins
 break: check-tools $(HELM_CHART_DIR) ## Inject N+1 + constrain resources
 	@$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --reuse-values \
 		--set catalog.searchStrategy=broken \
+		--set catalog.searchDelayMs=50 \
 		--set readinglist.resources.requests.cpu=50m \
 		--set readinglist.resources.limits.cpu=75m \
 		--set readinglist.resources.requests.memory=48Mi \
@@ -218,6 +219,7 @@ break: check-tools $(HELM_CHART_DIR) ## Inject N+1 + constrain resources
 fix: check-tools $(HELM_CHART_DIR) ## Restore everything (single helm upgrade)
 	@$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --reuse-values \
 		--set catalog.searchStrategy=normal \
+		--set catalog.searchDelayMs=0 \
 		--set catalog.resources.requests.cpu=300m \
 		--set catalog.resources.limits.cpu=1 \
 		--set catalog.resources.requests.memory=128Mi \
