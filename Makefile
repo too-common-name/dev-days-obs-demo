@@ -193,6 +193,7 @@ deploy-infra: check-tools ## Deploy backing services, wait, configure, enable gr
 		--from-literal=KC_TEST_PASSWORD="$(KC_PASSWORD)" \
 		-n $(APP_NS) --dry-run=client -o yaml | $(OC) apply -f -
 	@$(OC) apply -f $(APP_INFRA_DIR)/config-jobs/ -n $(APP_NS)
+	@$(OC) apply -f $(APP_INFRA_DIR)/otel-infra-collector.yaml
 	@echo "Infrastructure deployed."
 
 # ====================================================================================
@@ -217,9 +218,9 @@ deploy-all: deploy-operators deploy-platform deploy-infra deploy-app ## Full ins
 break: check-tools $(HELM_CHART_DIR) ## Inject N+1 + constrain resources
 	@$(HELM) upgrade $(HELM_RELEASE) $(HELM_CHART_DIR) -n $(APP_NS) --reuse-values \
 		--set catalog.searchStrategy=broken \
-		--set catalog.searchDelayMs=50 \
-		--set readinglist.resources.requests.cpu=50m \
-		--set readinglist.resources.limits.cpu=75m \
+		--set catalog.searchDelayMs=60 \
+		--set readinglist.resources.requests.cpu=25m \
+		--set readinglist.resources.limits.cpu=50m \
 		--set readinglist.resources.requests.memory=48Mi \
 		--set readinglist.resources.limits.memory=96Mi
 	@$(OC) rollout status deployment/catalog-service -n $(APP_NS) --timeout=120s
@@ -303,6 +304,7 @@ destroy-app: check-tools ## Uninstall Helm release (keeps infra)
 	@$(HELM) uninstall $(HELM_RELEASE) -n $(APP_NS) || true
 
 destroy-infra: check-tools ## Delete Postgres, Keycloak, RabbitMQ, dashboards, SCC, namespace
+	@$(OC) delete -f $(APP_INFRA_DIR)/otel-infra-collector.yaml                  --ignore-not-found
 	@$(OC) delete -f $(APP_INFRA_DIR)/config-jobs/                  -n $(APP_NS) --ignore-not-found
 	@$(OC) delete -f $(APP_INFRA_DIR)/keycloak/keycloak.yaml        -n $(APP_NS) --ignore-not-found
 	@$(OC) delete -f $(APP_INFRA_DIR)/keycloak/route.yaml           -n $(APP_NS) --ignore-not-found

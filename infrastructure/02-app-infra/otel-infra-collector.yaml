@@ -1,0 +1,134 @@
+# ========================================================
+# 1. SERVICE ACCOUNT
+# ========================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-infra-collector-deployment
+  namespace: myreadings-dev
+---
+# ========================================================
+# 2. RBAC: Read Node Stats + K8s API (for kubeletstats + k8s_cluster)
+# ========================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-infra-collector-myreadings
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "nodes/proxy", "nodes/metrics", "nodes/stats"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "namespaces", "services", "endpoints", "replicationcontrollers", "resourcequotas"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-infra-collector-myreadings-binding
+subjects:
+- kind: ServiceAccount
+  name: otel-infra-collector-deployment
+  namespace: myreadings-dev
+roleRef:
+  kind: ClusterRole
+  name: otel-infra-collector-myreadings
+  apiGroup: rbac.authorization.k8s.io
+---
+# ========================================================
+# 3. INFRA COLLECTOR (kubeletstats + k8s_cluster)
+# ========================================================
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-infra
+  namespace: myreadings-dev
+  labels:
+    app: infra-collector
+spec:
+  mode: daemonset
+  serviceAccount: otel-infra-collector-deployment
+  env:
+    - name: K8S_NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+  config:
+    receivers:
+      kubeletstats:
+        collection_interval: 15s
+        auth_type: serviceAccount
+        endpoint: "https://${env:K8S_NODE_NAME}:10250"
+        insecure_skip_verify: true
+        metric_groups: [pod, container]
+
+      k8s_cluster:
+        collection_interval: 15s
+        node_conditions_to_report: [Ready]
+        allocatable_types_to_report: [cpu, memory]
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 50
+        spike_limit_percentage: 10
+
+      filter/namespace:
+        error_mode: ignore
+        metrics:
+          include:
+            match_type: strict
+            resource_attributes:
+              - key: k8s.namespace.name
+                value: myreadings-dev
+
+      filter/containers:
+        error_mode: ignore
+        metrics:
+          include:
+            match_type: regexp
+            resource_attributes:
+              - key: k8s.container.name
+                value: ".*-service"
+
+    exporters:
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        resource_to_telemetry_conversion:
+          enabled: true
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [kubeletstats, k8s_cluster]
+          processors: [memory_limiter, filter/namespace, filter/containers]
+          exporters: [prometheus]
+---
+# ========================================================
+# 4. POD MONITOR (so UWM scrapes the collector)
+# ========================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: otel-infra-collector-monitor
+  namespace: myreadings-dev
+  labels:
+    k8s-app: otel-infra-collector
+spec:
+  selector:
+    matchLabels:
+      app: infra-collector
+  podMetricsEndpoints:
+    - port: prometheus
+      interval: 15s
+      path: /metrics
+      scheme: http
