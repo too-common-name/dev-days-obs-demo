@@ -114,8 +114,17 @@ deploy-platform: check-tools ## Deploy UWM, Loki, Tempo, Korrel8r, Perses, MCP, 
 	else \
 		echo "Skipping OBC (USE_OBC=false). Ensure Loki/Tempo secrets exist."; \
 	fi
-	@sed 's|ocs-external-storagecluster-ceph-rbd|$(STORAGE_CLASS_BLOCK)|g' $(PLATFORM_DIR)/02-logging-stack.yaml | $(OC) apply -f -
-	@$(OC) apply -f $(PLATFORM_DIR)/03-tracing-stack.yaml
+	@if [ "$(USE_OBC)" = "true" ]; then \
+		sed 's|ocs-external-storagecluster-ceph-rbd|$(STORAGE_CLASS_BLOCK)|g' $(PLATFORM_DIR)/02-logging-stack.yaml | $(OC) apply -f -; \
+	else \
+		sed 's|ocs-external-storagecluster-ceph-rbd|$(STORAGE_CLASS_BLOCK)|g' $(PLATFORM_DIR)/02-logging-stack.yaml | \
+			$(YQ) 'del(.spec.storage.tls)' | $(OC) apply -f -; \
+	fi
+	@if [ "$(USE_OBC)" = "true" ]; then \
+		$(OC) apply -f $(PLATFORM_DIR)/03-tracing-stack.yaml; \
+	else \
+		$(YQ) 'del(.spec.storage.tls)' $(PLATFORM_DIR)/03-tracing-stack.yaml | $(OC) apply -f -; \
+	fi
 	@$(OC) apply -f $(PLATFORM_DIR)/04-ui-plugins.yaml
 	@$(OC) apply -f $(PLATFORM_DIR)/05-korrel8r-otel-rules.yaml
 	@echo "Waiting for Korrel8r deployment..."
