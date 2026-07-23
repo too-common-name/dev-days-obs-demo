@@ -1,16 +1,23 @@
-# Custom Korrel8r rules for OTLP log correlation.
+# Custom Korrel8r rules for OTLP signal correlation.
 #
-# The COO-managed Korrel8r uses default rules that expect CLF-style log labels
-# (kubernetes_namespace_name, kubernetes_pod_name). OTLP logs use k8s_* labels.
+# The COO-managed Korrel8r uses default rules that expect Prometheus-style
+# labels (namespace, pod) and CLF-style log labels (kubernetes_namespace_name,
+# kubernetes_pod_name). Our OTel-based metrics/logs use k8s_* labels instead.
+#
+# Problem: the built-in AlertToPod rule in alert.yaml has NO guard for empty
+# pod names. When an alert has k8s_pod_name (OTel) but not pod/kubernetes_pod_name,
+# the built-in rule generates `name: ""` which returns ALL pods in the namespace.
+# Our guarded AlertToPodOtel resolves the correct pod, but korrel8r unions both
+# results → all pods shown. Fix: override alert.yaml with guarded versions.
 #
 # Strategy: mount custom rules into /etc/korrel8r/rules/ via subPath, overriding
-# the built-in all.yaml to include our otel-log.yaml. Applied via Server Side
-# Apply with a distinct field-manager so the operator doesn't overwrite it.
+# alert.yaml and all.yaml. Applied via Server Side Apply with a distinct
+# field-manager so the operator doesn't overwrite it.
 #
 # Apply with:
-#   oc apply -f 05a-korrel8r-otel-rules-cm.yaml
+#   oc apply -f 05-korrel8r-otel-rules.yaml
 #   oc apply --server-side --field-manager=korrel8r-otel-customization \
-#            --force-conflicts -f 05b-korrel8r-deployment-patch.yaml
+#            --force-conflicts -f 06-korrel8r-deployment-patch.yaml
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -29,6 +36,167 @@ data:
       - trace.yaml
       - incident.yaml
       - otel-log.yaml
+
+  # Override built-in alert.yaml: adds guards for empty name/namespace to
+  # prevent rules from returning all resources when a label is missing.
+  # Also adds OTel k8s_* label lookups to AlertToPod and PodToAlert.
+  alert.yaml: |
+    rules:
+      - name: AlertToDeployment
+        start:
+          domain: alert
+        goal:
+          domain: k8s
+          classes: [Deployment.apps]
+        result:
+          query: |-
+            {{- $namespace := index .Labels "namespace" -}}
+            {{- $deployment := index .Labels "deployment" -}}
+            {{- if all $namespace $deployment -}}
+            k8s:Deployment.v1.apps:{namespace: "{{$namespace}}", name: "{{$deployment}}"}
+            {{- end -}}
+
+      - name: AlertToPod
+        start:
+          domain: alert
+        goal:
+          domain: k8s
+          classes: [Pod.v1]
+        result:
+          query: |-
+            {{- $namespace := or (index .Labels "namespace") (index .Labels "kubernetes_namespace_name") (index .Labels "k8s_namespace_name") "" -}}
+            {{- $pod := or (index .Labels "pod") (index .Labels "kubernetes_pod_name") (index .Labels "k8s_pod_name") "" -}}
+            {{- if all $namespace $pod -}}
+            k8s:Pod.v1:{namespace: "{{$namespace}}", name: "{{$pod}}"}
+            {{- end -}}
+
+      - name: AlertToPodDisruptionBudget
+        start:
+          domain: alert
+        goal:
+          domain: k8s
+          classes: [PodDisruptionBudget.v1.policy]
+        result:
+          query: |-
+            {{- $namespace := index .Labels "namespace" -}}
+            {{- $pdb := index .Labels "poddisruptionbudget" -}}
+            {{- if all $namespace $pdb -}}
+            k8s:PodDisruptionBudget.v1.policy:{namespace: "{{$namespace}}", name: "{{$pdb}}"}
+            {{- end -}}
+
+      - name: AlertToDaemonSet
+        start:
+          domain: alert
+        goal:
+          domain: k8s
+          classes: [DaemonSet.apps]
+        result:
+          query: |-
+            {{- $namespace := index .Labels "namespace" -}}
+            {{- $ds := index .Labels "daemonset" -}}
+            {{- if all $namespace $ds -}}
+            k8s:DaemonSet.apps:{namespace: "{{$namespace}}", name: "{{$ds}}"}
+            {{- end -}}
+
+      - name: AlertToStatefulSet
+        start:
+          domain: alert
+        goal:
+          domain: k8s
+          classes: [StatefulSet.apps]
+        result:
+          query: |-
+            {{- $namespace := index .Labels "namespace" -}}
+            {{- $sts := index .Labels "statefulset" -}}
+            {{- if all $namespace $sts -}}
+            k8s:StatefulSet.apps:{namespace: "{{$namespace}}", name: "{{$sts}}"}
+            {{- end -}}
+
+      - name: AlertToMetric
+        start:
+          domain: alert
+        goal:
+          domain: metric
+        result:
+          query: |-
+            metric:metric:{{.Expression}}
+
+      - name: PodToAlert
+        start:
+          domain: k8s
+          classes: [Pod]
+        goal:
+          domain: alert
+        result:
+          query: |-
+            alert:alert:{"namespace":"{{.metadata.namespace}}","pod":"{{.metadata.name}}"}
+
+      - name: PodToAlertOtel
+        start:
+          domain: k8s
+          classes: [Pod]
+        goal:
+          domain: alert
+        result:
+          query: |-
+            alert:alert:{"k8s_namespace_name":"{{.metadata.namespace}}","k8s_pod_name":"{{.metadata.name}}"}
+
+      - name: PodToLokiAlert
+        start:
+          domain: k8s
+          classes: [Pod]
+        goal:
+          domain: alert
+        result:
+          query: |-
+            alert:alert:{"namespace":"{{.metadata.namespace}}","kubernetes_pod_name":"{{.metadata.name}}"}
+
+      - name: DeploymentToAlert
+        start:
+          domain: k8s
+          classes: [Deployment.apps]
+        goal:
+          domain: alert
+        result:
+          query: |-
+            alert:alert:{"namespace":"{{.metadata.namespace}}","deployment":"{{.metadata.name}}"}
+
+      - name: PodDisruptionBudgetToAlert
+        start:
+          domain: k8s
+          classes: [PodDisruptionBudget.v1.policy]
+        goal:
+          domain: alert
+        result:
+          query: |-
+            alert:alert:{"namespace":"{{.metadata.namespace}}","poddisruptionbudget":"{{.metadata.name}}"}
+
+      - name: DaemonSetToAlert
+        start:
+          domain: k8s
+          classes: [DaemonSet.apps]
+        goal:
+          domain: alert
+        result:
+          query: |-
+            alert:alert:{"namespace":"{{.metadata.namespace}}","daemonset":"{{.metadata.name}}"}
+
+      - name: StatefulSetToAlert
+        start:
+          domain: k8s
+          classes: [StatefulSet.apps]
+        goal:
+          domain: alert
+        result:
+          query: |-
+            alert:alert:{"namespace":"{{.metadata.namespace}}","statefulset":"{{.metadata.name}}"}
+
+    statusRules:
+      - name: AlertSeverity
+        start:
+          domain: alert
+        status: |-
+          {{with .Labels.severity}}{{if ne . "none"}}{{.}}{{end}}{{end}}
 
   otel-log.yaml: |
     rules:
@@ -51,3 +219,9 @@ data:
         result:
           query: |-
             k8s:Pod:{namespace: "{{.k8s_namespace_name}}", name: "{{.k8s_pod_name}}"}
+
+  # NOTE: otel-metric.yaml and otel-trace.yaml removed for now.
+  # - MetricToPod: not possible — korrel8r metric domain exposes model.Metric
+  #   (typed map) that Go templates cannot access. Needs upstream fix.
+  # - LogOtelToTrace / TraceToLogOtel: not needed yet. Can be re-added when
+  #   log→trace correlation is demoed.

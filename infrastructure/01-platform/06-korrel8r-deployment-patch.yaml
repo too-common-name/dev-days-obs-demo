@@ -1,7 +1,7 @@
 # Server Side Apply patch for the Korrel8r Deployment.
 #
-# Adds custom OTLP rules volume/mounts without conflicting with the
-# observability-operator's managed fields.
+# Overrides alert.yaml (adds guards for empty labels + OTel k8s_* support)
+# and adds custom OTLP rules without conflicting with the operator's managed fields.
 #
 # Apply with:
 #   oc apply --server-side \
@@ -27,6 +27,10 @@ spec:
             - name: otel-rules
               mountPath: /etc/korrel8r/rules/all.yaml
               subPath: all.yaml
+              readOnly: true
+            - name: otel-rules
+              mountPath: /etc/korrel8r/rules/alert.yaml
+              subPath: alert.yaml
               readOnly: true
             - name: otel-rules
               mountPath: /etc/korrel8r/rules/otel-log.yaml
