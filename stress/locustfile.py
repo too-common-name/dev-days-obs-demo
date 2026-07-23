@@ -43,7 +43,7 @@ class MyReadingsUser(HttpUser):
         return {"Authorization": f"Bearer {self.token}"}
 
     # ---- search (hits catalog-service, triggers N+1 when broken) ----
-    @task(5)
+    @task(3)
     def search_books(self):
         term = random.choice(SEARCH_TERMS)
         with self.client.get(
@@ -83,29 +83,11 @@ class MyReadingsUser(HttpUser):
                         if rl.get("readingListId") or rl.get("id")
                     ]
 
-    # @task(2)
-    # def browse_catalog(self):
-    #     self.client.get(
-    #         "/api/v1/books?page=0&size=20",
-    #         headers=self._headers(),
-    #         verify=False,
-    #         name="/api/v1/books",
-    #     )
-
-    # # ---- book detail + reviews (hits catalog + review-service) ----
-    # @task(1)
-    # def book_detail(self):
-    #     if not self.book_ids:
-    #         return
-    #     book_id = random.choice(self.book_ids)
-    #     self.client.get(
-    #         f"/api/v1/reviews/books/{book_id}/stats",
-    #         headers=self._headers(),
-    #         verify=False,
-    #         name="/api/v1/reviews/books/{bookId}/stats",
-    #     )
-
-    # # ---- Refresh token periodically ----
-    # @task(1)
-    # def refresh_token(self):
-    #     self._fetch_token()
+    @task(2)
+    def browse_catalog(self):
+        self.client.get(
+            "/api/v1/books?page=0&size=20",
+            headers=self._headers(),
+            verify=False,
+            name="/api/v1/books",
+        )
