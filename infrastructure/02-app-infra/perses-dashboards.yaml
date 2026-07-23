@@ -137,17 +137,18 @@ spec:
                   spec:
                     datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
                     query: >-
-                      max by (container) (
-                        container_memory_working_set_bytes{
-                          namespace="myreadings-dev",
-                          container=~"(catalog|readinglist|review|user)-service"
+                      max by (k8s_container_name) (
+                        container_memory_usage_bytes{
+                          k8s_namespace_name="myreadings-dev",
+                          k8s_container_name=~"(catalog|readinglist|review|user)-service"
                         }
-                        / on(container, pod, namespace) group_left()
-                        kube_pod_container_resource_limits{
-                          namespace="myreadings-dev",
-                          container=~"(catalog|readinglist|review|user)-service",
-                          resource="memory"
-                        }
+                        / on(k8s_container_name, k8s_pod_name, k8s_namespace_name) group_left()
+                        max by (k8s_container_name, k8s_pod_name, k8s_namespace_name) (
+                          k8s_container_memory_limit_bytes{
+                            k8s_namespace_name="myreadings-dev",
+                            k8s_container_name=~"(catalog|readinglist|review|user)-service"
+                          }
+                        )
                       ) * 100
 
       restarts:
@@ -155,7 +156,7 @@ spec:
         spec:
           display:
             name: "Container Restarts"
-            description: "Restart count over the last 5 minutes (OOMKill indicator)"
+            description: "Total restart count (gauge from k8s API)"
           plugin:
             kind: "TimeSeriesChart"
             spec:
@@ -172,11 +173,11 @@ spec:
                   spec:
                     datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
                     query: >-
-                      increase(
-                        kube_pod_container_status_restarts_total{
-                          namespace="myreadings-dev",
-                          container=~"(catalog|readinglist|review|user)-service"
-                        }[5m]
+                      max by (k8s_container_name, k8s_pod_name) (
+                        k8s_container_restarts{
+                          k8s_namespace_name="myreadings-dev",
+                          k8s_container_name=~"(catalog|readinglist|review|user)-service"
+                        }
                       )
 
       latencyAvg:
@@ -235,15 +236,16 @@ spec:
                   spec:
                     datasource: { kind: "PrometheusDatasource", name: "perses-global-ds" }
                     query: >-
-                      max by (container) (
-                        rate(container_cpu_usage_seconds_total{
-                          namespace="myreadings-dev",
-                          container=~"(catalog|readinglist|review|user)-service"
-                        }[2m])
-                        / on(container, pod, namespace) group_left()
-                        kube_pod_container_resource_limits{
-                          namespace="myreadings-dev",
-                          container=~"(catalog|readinglist|review|user)-service",
-                          resource="cpu"
+                      max by (k8s_container_name) (
+                        container_cpu_usage{
+                          k8s_namespace_name="myreadings-dev",
+                          k8s_container_name=~"(catalog|readinglist|review|user)-service"
                         }
+                        / on(k8s_container_name, k8s_pod_name, k8s_namespace_name) group_left()
+                        max by (k8s_container_name, k8s_pod_name, k8s_namespace_name) (
+                          k8s_container_cpu_limit{
+                            k8s_namespace_name="myreadings-dev",
+                            k8s_container_name=~"(catalog|readinglist|review|user)-service"
+                          }
+                        )
                       ) * 100
